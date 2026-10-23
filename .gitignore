@@ -2,7 +2,10 @@
 __pycache__/
 *.py[codz]
 *$py.class
-
+archivos_E1 3/
+Copia de Tarea 2/
+*.pdf
+prueba.py
 # C extensions
 *.so
 
