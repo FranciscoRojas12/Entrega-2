@@ -1,18 +1,18 @@
 import simpy
 import numpy as np
 import scipy.stats as st
-from collections import deque
 from clases_funciones import Maquina, Cliente, simular_ppnh_tramos, generar_lista_cliente, elegir_rutina
-# Resume deque progra avanzada: deque() crea deque, con deque.append(elemento) agregamos al final de la cola, deque.popleft() saca la que esta al final de la cola
-
+import os
 
 class Simulacion:
-    def __init__(self):
+    def __init__(self, archivo):
+        self.archivo = archivo
         self.dict_datos_replica = {}
         self.cords_celda = {}
-        for cord_x in range(7):
-            for cord_y in range(7):
-                self.cords_celda[(cord_x) * 7 + (cord_y + 1)] = (cord_x, cord_y)
+        for celda in range(1, 50):
+            fila = (celda - 1) // 7
+            col = 6 - ((celda - 1) % 7)
+            self.cords_celda[celda] = (col, fila)
         #Distribuciones de velocidad según tipo de persona
         # loc es el minimo, scale es el ancho (max-min) y c es (moda-minim)/scale
         self.velocidad = {
@@ -25,10 +25,10 @@ class Simulacion:
             'M' : lambda: st.triang.rvs(loc = 45, scale = (75 - 45), c = ((60 - 45) / (75 - 45)), random_state=self.rng),}
         # REVISAR EL VALOR DE LOS PARAMETROS
         self.tiempo_registro = {
-            'E' : lambda: self.generar_mezcla(0.85, 0.15, st.gamma.rvs(a=10, scale=0.16, random_state=self.rng), st.lognorm.rvs(s=0.22, scale=np.exp(1.05), random_state=self.rng)),
+            'E' : lambda: self.generar_mezcla(0.85, st.gamma.rvs(a=10, scale=0.16, random_state=self.rng), st.lognorm.rvs(s=0.22, scale=np.exp(1.05), random_state=self.rng)),
             'X' : lambda: min(2.2, st.lognorm.rvs(s=0.28, scale=np.exp(0.05), random_state=self.rng)),
-            'F' : lambda: self.generar_mezcla(0.85, 0.15, st.gamma.rvs(a=10, scale=0.16, random_state=self.rng), st.lognorm.rvs(s=0.22, scale=np.exp(1.05), random_state=self.rng)),
-            'I' : lambda: self.generar_mezcla(0.75, 0.25, st.gamma.rvs(a=9, scale=0.25, random_state=self.rng), st.lognorm.rvs(s=0.20, scale=np.exp(1.25), random_state=self.rng))}
+            'F' : lambda: self.generar_mezcla(0.85, st.gamma.rvs(a=10, scale=0.16, random_state=self.rng), st.lognorm.rvs(s=0.22, scale=np.exp(1.05), random_state=self.rng)),
+            'I' : lambda: self.generar_mezcla(0.75, st.gamma.rvs(a=9, scale=0.25, random_state=self.rng), st.lognorm.rvs(s=0.20, scale=np.exp(1.25), random_state=self.rng))}
         self.rutinas_opciones = {
             'E' : lambda: self.rng.choice(['Empuje', 'Jalon', 'Piernas', 'Tren superior', 'Cuerpo completo'], p = [0.2, 0.2, 0.2, 0.25, 0.15]),
             'X' : lambda: self.rng.choice(['Empuje', 'Jalon', 'Piernas', 'Tren superior', 'Cuerpo completo'], p = [0.2, 0.2, 0.2, 0.25, 0.15]),
@@ -64,6 +64,11 @@ class Simulacion:
             'X': {'Empuje': 0.18, 'Jalon': 0.22, 'Piernas': 0.12, 'Tren superior': 0.2, 'Cuerpo completo': 0.15},
             'I': {'Empuje': 0.4, 'Jalon': 0.44, 'Piernas': 0.28, 'Tren superior': 0.38, 'Cuerpo completo': 0.32 },
             'F': {'Empuje': 0.4, 'Jalon': 0.44, 'Piernas': 0.28, 'Tren superior': 0.38, 'Cuerpo completo': 0.32}}
+        self.insatisfaccion = {
+            'E': {'R': 0.45, 'W': 0.35, 'C': 0.10, 'S': 0.10},
+            'X': {'R': 0.30, 'W': 0.55, 'C': 0.05, 'S': 0.10},
+            'F': {'R': 0.35, 'W': 0.40, 'C': 0.10, 'S': 0.15},
+            'I': {'R': 0.60, 'W': 0.20, 'C': 0.05, 'S': 0.15}}
         # T_k^{max} [min], tau_k [min], Z_k^B [L], p_k^C
         self.info_perfil_t8 = {'E' : [72, 8, 1.25, 0.4], 'X' : [50, 5, 1, 0.15], 'I' : [70, np.inf, 1.5, 0.28], 'F' : [52, 7, 1.25, 0.35]}
         # REVISAR PARAMETROS
@@ -95,14 +100,14 @@ class Simulacion:
         self.dur_ejer_cardio = {
             'E': lambda: min(28, st.gamma.rvs(a = 9, scale = 2, random_state=self.rng)),
             'X': lambda: st.beta.rvs(a=3, b=3, loc=6, scale=(12-6), random_state=self.rng),
-            'F': lambda: self.generar_mezcla(0.75, 0.25, st.gamma.rvs(a=12, scale=1.2, random_state=self.rng), st.lognorm.rvs(s=0.18, scale=np.exp(3), random_state=self.rng)),
-            'I': lambda: self.generar_mezcla(0.7, 0.2, st.gamma.rvs(a=10, scale=2.3, random_state=self.rng), st.lognorm.rvs(s=0.2, scale=np.exp(3.55), random_state=self.rng))}
+            'F': lambda: self.generar_mezcla(0.75, st.gamma.rvs(a=12, scale=1.2, random_state=self.rng), st.lognorm.rvs(s=0.18, scale=np.exp(3), random_state=self.rng)),
+            'I': lambda: self.generar_mezcla(0.7, st.gamma.rvs(a=10, scale=2.3, random_state=self.rng), st.lognorm.rvs(s=0.2, scale=np.exp(3.55), random_state=self.rng))}
         self.tiempo_reparacion = {
             'G1': lambda: min(50, st.gamma.rvs(a = 7, scale = 5, random_state=self.rng)),
-            'G2': lambda: self.generar_mezcla(0.75, 0.25, st.gamma.rvs(a=12, scale=1.35, random_state=self.rng), st.lognorm.rvs(s=0.18, scale=np.exp(3.55), random_state=self.rng)),
+            'G2': lambda: self.generar_mezcla(0.75, st.gamma.rvs(a=12, scale=1.35, random_state=self.rng), st.lognorm.rvs(s=0.18, scale=np.exp(3.55), random_state=self.rng)),
             'G3': lambda: min(48, st.fisk.rvs(c=4.2, scale=20.5, random_state=self.rng)),
-            'G4': lambda: self.generar_mezcla(0.65, 0.35, st.gamma.rvs(a=12, scale=2.1, random_state=self.rng), st.lognorm.rvs(s=0.16, scale=np.exp(3.7), random_state=self.rng)),
-            'G5': lambda: min(55, self.generar_mezcla(0.7, 0.3, st.weibull_min.rvs(c = 4, scale = 21, loc = 0, random_state=self.rng), st.lognorm.rvs(s=0.2, scale=np.exp(3.55), random_state=self.rng)))}
+            'G4': lambda: self.generar_mezcla(0.65, st.gamma.rvs(a=12, scale=2.1, random_state=self.rng), st.lognorm.rvs(s=0.16, scale=np.exp(3.7), random_state=self.rng)),
+            'G5': lambda: min(55, self.generar_mezcla(0.7, st.weibull_min.rvs(c = 4, scale = 21, loc = 0, random_state=self.rng), st.lognorm.rvs(s=0.2, scale=np.exp(3.55), random_state=self.rng)))}
         self.g_reparacion = {'Trotadora': 'G1','Aperturas de pecho': 'G2','Press de pecho': 'G2', 'Press de hombros' : 'G2', 'Curl de biceps': 'G3', 'Jalon al pecho': 'G3','Remo sentado': 'G3',
         'Prensa de piernas': 'G4', 'Curl femoral': 'G4', 'Extension de piernas': 'G4', 'Polea multifuncional': 'G5'} 
         # REVISAR PARAMETROS
@@ -152,6 +157,7 @@ class Simulacion:
         self.tiempo_reposicion = {
             'Agua': lambda: self.generar_mezcla(0.75, st.gamma.rvs(a=16, scale=0.35, random_state=self.rng), st.lognorm.rvs(s=0.30, scale=np.exp(2.45), random_state=self.rng)),
             'Toallas': lambda: st.gamma.rvs(a=16, scale=0.25, random_state=self.rng)}
+        
     def generar_recursos(self):
         self.dict_maquinas = {}
         self.dict_maquinas_operativas = {}
@@ -183,7 +189,7 @@ class Simulacion:
             Maquina(self.env, 'Jalon al pecho', 'Jalon', 22)]
         self.dict_maquinas['Remo sentado'] = [
             Maquina(self.env, 'Remo sentado', 'Jalon', 15),
-            Maquina(self.env, 'Remo sentado', 'Jalon', 39)]
+            Maquina(self.env, 'Remo sentado', 'Jalon', 29)]
         self.dict_maquinas['Curl de biceps'] = [
             Maquina(self.env, 'Curl de biceps', 'Jalon', 11),
             Maquina(self.env, 'Curl de biceps', 'Jalon', 33)]
@@ -202,23 +208,29 @@ class Simulacion:
 
         #R costo ordinario [CLP/h] 4500 costo extra [CLP/h] 6750
         self.recepcionistas = simpy.PriorityResource(self.env, capacity=2)
+
+            
         #t costo ordinario [CLP/h] 10000 costo extra [CLP/h] 15000
         self.tecnico = simpy.Resource(self.env, capacity=1)
         #e costo ordinario [CLP/h] 8000 costo extra [CLP/h] 12000
         self.entrenadores = simpy.Store(self.env, capacity=2)
         # El valor cera la celda en que se encuentre el entrenador
         for entrenador in range(1, 3):
-            self.entrenadores.put([f'PT{entrenador}', 25])
 
+            self.entrenadores.put([f'PT{entrenador}', 25, self.velocidad['PT']()])
         self.dispensador_acceso = simpy.Resource(self.env, capacity=1)
         self.dispensador_toallas = simpy.Store(self.env, capacity= 100)
-        for toalla in (100):
+        for toalla in range(100):
             self.dispensador_toallas.put(1)
         self.bidon_acceso = simpy.Resource(self.env, capacity=1)
         self.bidon_agua = simpy.Container(self.env, capacity = 20, init = 20)
+        self.bido_reposicion = simpy.Event(self.env)
+        self.bido_reposicion.succeed()
+        self.dispensador_reposicion = simpy.Event(self.env)
+        self.dispensador_reposicion.succeed()
 
     def generar_mezcla(self, peso_a, distribucion_a, distribucion_b):
-        u = st.uniform.rvs(loc = 1, scale = 1, random_state=self.rng)
+        u = self.rng.random()
         if u < peso_a:
             return distribucion_a
         else:
@@ -228,7 +240,7 @@ class Simulacion:
         return (0.7 * (abs(coordenadas_a[0] - coordenadas_b[0]) + abs(coordenadas_a[1] - coordenadas_b[1])) + 0.3 
                 * (np.sqrt((coordenadas_a[0] - coordenadas_b[0])**2 + (coordenadas_a[1]- coordenadas_b[1])**2))) * 2.5
     
-    def iniciar_simulacion(self, seed, n_replicas, misma_semilla = True):
+    def iniciar_simulacion(self, seed, n_replicas, misma_semilla = False):
         for replica in range(n_replicas):
             if misma_semilla:
                 self.rng = np.random.default_rng(seed)
@@ -237,346 +249,862 @@ class Simulacion:
             self.simular_una_replica(replica)
 
     def simular_una_replica(self, id_replica):
+        Cliente.id = 0 
+        self.dict_pedir_maquina = {}
         self.env = simpy.Environment()
         self.generar_recursos()
-        self.dict_info_recolectada = {'int_llegada': 0, 'cliente_desviado': 0, 'n_fallas': 0}
-        self.dict_datos_estado = {'n_clientes_sistema': 0, 'pedir_agua' : [False], 'pedir_toallas': [False], 'celda_tecnico': 7}
-        # Poner procesos que van aquí
-        self.env.process()
-        # self.env.run()
+        # Permanencia: Obtener promedio y el percentil 90
+        # Espera total calcular propmedio y el percentil 90
+        # Finalizacion de rutinas completaron_rutina/clientes_admitidos
+        # cumplimiento de ejercicio = n_ejercicio_completo/n_ejercicio_planificados
+        # Finalizacion de cardio n_completaron_cardio/n_planificaron_cardio
+        # insatisfaccion de admitidos: sum('insatisfaccion_admintidos')/'clientes_admitidos'
+
+
+        self.dict_info_recolectada = {'int_llegada': 0, 'cliente_desviado': 0, 'n_fallas': 0, 'permanencia': [], 'espera_total': [],
+                                      'n_ejercicio_completo': 0, 'n_ejercicio_planificados': 0, 'clientes_admitidos': 0, 'completaron_rutina': 0,
+                                      'n_planificaron_cardio': 0, 'n_completaron_cardio': 0, 'n_ejercicios_omitidos': 0, 'n_ejercicios_pendientes': 0,
+                                      'insatisfaccion_admintidos': []}
+
+        self.dict_datos_estado = {'n_clientes_sistema': 0, 'pedir_agua' : False, 'pedir_toallas': False, 'celda_tecnico': 7,
+                                  'velocidad_mecanico': self.velocidad['M'](), 'velocidad_recepcionista': [self.velocidad['R'](), self.velocidad['R']()]}
+        self.env.process(self.inpeccion_agua())
+        self.env.process(self.inpeccion_toallas())
+        self.env.process(self.generar_cliente())
+        self.env.run()
         self.dict_datos_replica[id_replica] = [self.dict_info_recolectada, self.dict_datos_estado]
 
     def generar_cliente(self):
-        lista_clientes = generar_lista_cliente(self.rgn, simular_ppnh_tramos(self.rgn, True))
+        lista_clientes = generar_lista_cliente(self.rng, simular_ppnh_tramos(self.rng, True))
         for cliente_llegada in lista_clientes:
-            # Reiniciar id
-            cliente = Cliente(cliente_llegada[1])
-            yield self.env.timeout(cliente_llegada[0])
+            tipo = cliente_llegada[1]
+            cliente = Cliente(tipo, self.info_perfil_t8[tipo][2], 2, self.info_perfil_t8[tipo][0])
+            yield self.env.timeout(cliente_llegada[0] - self.env.now)
             self.env.process(self.llegada_clientes(cliente))
 
     def llegada_clientes(self, cliente):
         self.dict_info_recolectada['int_llegada'] += 1
-        # Generar log
+        
         if self.dict_datos_estado['n_clientes_sistema'] >= 30:
             self.dict_info_recolectada['cliente_desviado'] += 1
-            # Generar log de entrada
+            cliente.se_va = True
         else:
-            # Se actualiza la cantidad de clientes en el sistema
+            cliente.admitido = True
+   
             self.dict_datos_estado['n_clientes_sistema'] +=1 
-            # Se registra el tiempo de inicio de atencion
-            cliente.hora_llegada = self.env.now()
-            # Se calula y espera el tiempo de traslado de la celda 1 a la 7
-            velocidad = self.velocidad[cliente.perfil]()
-            distancia = self.distancia(self.cords_celda(1), self.cords_celda(7))
-            yield self.env.timeout(distancia / velocidad)
+            self.dict_info_recolectada['clientes_admitidos'] += 1
+
+            cliente.hora_llegada = self.env.now
+
+            cliente.velocidad = self.velocidad[cliente.tipo]()
+
+            distancia = self.distancia(self.cords_celda[1], self.cords_celda[7])
+            yield self.env.timeout(distancia / cliente.velocidad)
             cliente.celda = 7
-            # Se solicita recepcionista con prioridad 2
-            with self.recepcionistas.request(priority= 2) as pedir_recepcionista:
-                yield pedir_recepcionista
-                # Ya teniendo a la recepcionista, se espera el tiempo de registro
-                tiempo_registro = self.tiempo_registro[cliente.perfil]()
+
+            inicio_espera = self.env.now
+
+            pedir_recepcionista = self.recepcionistas.request(priority= 2)
+
+            tiempo_restante = max(self.info_perfil_t8[cliente.tipo][0]  - (self.env.now - cliente.hora_llegada), 0)
+            tiempo_restante = self.env.timeout(tiempo_restante)
+
+            tiempo_cierre = max(900 - self.env.now, 0)
+            tiempo_cierre = self.env.timeout(tiempo_cierre)
+
+            yield pedir_recepcionista | tiempo_restante | tiempo_cierre
+            cliente.espera_recepcion += self.env.now - inicio_espera
+
+            if tiempo_restante.processed or tiempo_cierre.processed:
+                cliente.se_va = True
+                pedir_recepcionista.cancel()
+
+            else:
+
+                tiempo_registro = self.tiempo_registro[cliente.tipo]()
                 yield self.env.timeout(tiempo_registro)
-                # Se eliga la rutina
-                seleccionar_rutina = self.rutinas_opciones[cliente.perfil]()
+
+                seleccionar_rutina = self.rutinas_opciones[cliente.tipo]()
                 if cliente.tipo == 'F':
-                    # Da lo mismo cual, no sigue el orden
                     desglose_rutina = self.orden_ejecucion_rutina['I'][seleccionar_rutina]
                 else:
-                    desglose_rutina = self.orden_ejecucion_rutina[cliente.perfil][seleccionar_rutina]
+                    desglose_rutina = self.orden_ejecucion_rutina[cliente.tipo][seleccionar_rutina]
+
                 rutina = elegir_rutina(seleccionar_rutina, desglose_rutina, self.rng)
-                p_p = self.agregar_polea[cliente.perfil][seleccionar_rutina]
+
+                p_p = self.agregar_polea[cliente.tipo][seleccionar_rutina]
                 hacer_polea = st.bernoulli.rvs(p = p_p, random_state=self.rng)
                 if hacer_polea == 1:
                     rutina += [['Polea multifuncional', 'pen']]
-                else:
-                    # No se hace polea, poner log tal vez
-                    pass
+                
                 cliente.rutina = rutina
-                # Se revisa si hace cardio
-                p_c = self.info_perfil_t8[cliente.perfil][3]
+                cliente.tiempo_acumulado = [self.info_perfil_t8[cliente.tipo][1] for i in range(len(cliente.rutina))]
+                cliente.tiempo_acumulado_cardio = self.info_perfil_t8[cliente.tipo][1]
+
+                p_c = self.info_perfil_t8[cliente.tipo][3]
                 hacer_cardio = st.bernoulli.rvs(p = p_c, random_state=self.rng)
                 if hacer_cardio == 1:
                     cliente.plan_cardio = True
                 else:
                     cliente.plan_cardio = False
-                # No se pide saca del dispensador, porque puede generar un deadlock (la recepcionista el la que repone toallas y si los se bloquean, el sistema no avanza)
-                cliente.toallas = 2
-            #Dice de la 6 a 13, pero según yo es de la 7 a 13
-            velocidad = self.velocidad[cliente.perfil]()
-            distancia = self.distancia(self.cords_celda(6), self.cords_celda(13))
-            yield self.env.timeout(distancia / velocidad)
-            cliente.celda = 13
-            self.rutina_fuerza(cliente)
-    # Considerar el 22:00, 900 minutos
-    # T_i max
-    # Consumo de toallas y agua
-    # Carido no consume toallas
+
+                self.recepcionistas.release(pedir_recepcionista)
+
+                distancia = self.distancia(self.cords_celda[6], self.cords_celda[13])
+                desplazamiento = self.env.timeout(distancia / cliente.velocidad)
+
+                tiempo_restante = max(self.info_perfil_t8[cliente.tipo][0]  - (self.env.now - cliente.hora_llegada), 0)
+                tiempo_restante = self.env.timeout(tiempo_restante)
+
+                tiempo_cierre = max(900 - self.env.now, 0)
+                tiempo_cierre = self.env.timeout(tiempo_cierre)
+
+                yield desplazamiento | tiempo_restante | tiempo_cierre
+
+                if tiempo_restante.processed or tiempo_cierre.processed:
+                    cliente.se_va = True
+                else:
+                    cliente.celda = 13
+                
+            if cliente.se_va == True:
+                self.env.process(self.salida_cliente(cliente))
+            else:
+                self.env.process(self.rutina_fuerza(cliente))
 
     def rutina_fuerza(self, cliente):
         if cliente.tipo == 'E':
-            # Usar el se va para cortar reocrrido
+
             for recorrido in range(1, 3):
-                for indice_ejercicio in len(cliente.rutina):
-                    if cliente.toalla < 1:
-                        self.buscar_toallas(cliente)
-                    if cliente.rutina[indice_ejercicio][1] == 'pen' and cliente.se_va == False:
+                if cliente.se_va == True:
+                    break
+                if recorrido == 2:
+                    cliente.tiempo_acumulado = [self.info_perfil_t8[cliente.tipo][1] for i in range(len(cliente.rutina))]
+                for indice_ejercicio in range(len(cliente.rutina)):
+
+                    if cliente.se_va == True:
+                        break
+
+                    if cliente.toallas < 1:
+                        yield self.env.process(self.buscar_toallas(cliente))
+
+                    if cliente.rutina[indice_ejercicio][1] == 'pen':
                         while True:
-                            # El return es [hay maquina operativa?, hay maquina sin cola, [maquina con cola cercana, distancia], [maquina sin cola cercana, distancia]]
-                            list_respuesta = self.elegir_maquina_cercana_menor_cola(cliente, self.dict_maquinas[cliente.rutina[indice_ejercicio][0]])
+                            if cliente.se_va == True:
+                                break
+
+                            list_maquinas = self.dict_maquinas[cliente.rutina[indice_ejercicio][0]]
+                            list_respuesta = self.elegir_maquina_cercana_menor_cola(cliente, list_maquinas)
+
                             if list_respuesta[0] == True:
-                                # Esto es para cuando hay maquina libre
+                                
                                 list_maquina_sel = list_respuesta[2] if list_respuesta[1] == True else list_respuesta[3]
-                                velocidad = self.velocidad[cliente.perfil]()
-                                recorrido = self.env.timeout(list_maquina_sel[1]/ velocidad)
-                                tiempo_restante = self.info_perfil_t8[0]  - (self.now() - cliente.hora_llegada) if (self.info_perfil_t8[0]  - (self.now() - cliente.hora_llegada)) > 0 else 0
+                                
+                                desplazamiento = self.env.timeout(list_maquina_sel[1]/ cliente.velocidad)
+
+                                tiempo_restante = max(self.info_perfil_t8[cliente.tipo][0]  - (self.env.now - cliente.hora_llegada), 0)
                                 tiempo_restante = self.env.timeout(tiempo_restante)
-                                # Hay que ver si en el reocrrido se puede ir o no. Porque si para en la mitad es raro
-                                # Hay que poner la celda
-                                tiempo_cierre = (900 - self.env.now()) if (900 - self.env.now()) else 0
+
+                                tiempo_cierre = max(900 - self.env.now, 0)
                                 tiempo_cierre = self.env.timeout(tiempo_cierre)
-                                yield recorrido | tiempo_restante | tiempo_cierre
-                                if tiempo_restante.triggered == True:
+
+                                yield desplazamiento | tiempo_restante | tiempo_cierre
+
+                                if tiempo_restante.processed == True or tiempo_cierre.processed == True:
                                     cliente.se_va = True
-                                    # Se va si llego a tiempo max durante reocorrido
-                                    self.salida_cliente()
-                                    break
-                                elif tiempo_cierre.triggeered == True:
-                                    cliente.se_va = True
-                                    self.salida_cliente()
                                     break
                                 else:
                                     cliente.celda = list_maquina_sel[0].celda
                                     if list_maquina_sel[0].operativa == True:
-                                        self.ejecutar_ejercicio_fuerza(self, cliente, list_maquina_sel[0], indice_ejercicio)
-                                    else:
-                                        # Aqui llego a la maquina, pero al llegar esta la maquina esta con fallas
-                                        pass
+                                        yield self.env.process(self.ejecutar_ejercicio_fuerza(cliente, list_maquina_sel[0], indice_ejercicio))
+                                        if cliente.rutina[indice_ejercicio][1] == 'pen':
+                                            if cliente.fallo_maquina == False:
+                                                if recorrido == 2:
+                                                    cliente.rutina[indice_ejercicio][1] = 'omit'
+                                                break
+                                        elif cliente.rutina[indice_ejercicio][1] == 'compl':
+                                            break
                             else:
-                                # No hay maquina operativa
-                                break
+                                # Aqui pasa cuando no hay maquinas operativas
+                                # No esta muy claro el enunciado, pero propongo dos camninos
+                                # Camino 1, solo pasa el ejercicio y lo deja como pendiente
+
+                                #break
+
+                                # Camino 2, espera hasta que encuentre una maquina opertativa (espera reparacion)
+                                # Igual es un poco raro el tiempo_max_espera, porque el enunciado no dice que espera tau por la reparacion
+
+                                eventos_reparacion = [maq.evento for maq in list_maquinas]
+                                eventos_reparacion = simpy.AnyOf(self.env, eventos_reparacion)
+
+                                tiempo_restante = max(self.info_perfil_t8[cliente.tipo][0]  - (self.env.now - cliente.hora_llegada), 0)
+                                tiempo_restante = self.env.timeout(tiempo_restante)
+
+                                tiempo_cierre = max(900 - self.env.now, 0)
+                                tiempo_cierre = self.env.timeout(tiempo_cierre)
+
+
+                                tiempo_max_espera = self.env.timeout(cliente.tiempo_acumulado[indice_ejercicio])
+
+                                yield eventos_reparacion | tiempo_restante | tiempo_cierre | tiempo_max_espera
+
+                                if tiempo_restante.processed or tiempo_cierre.processed:
+                                    cliente.se_va = True
+                                    break
+
+                                elif tiempo_max_espera.processed:
+                                    if recorrido == 2:
+                                        cliente.rutina[indice_ejercicio][1] = 'omit'
+                                        break
+                              
         elif cliente.tipo == 'X':
-            for indice_ejercicio in len(cliente.rutina):
-                if cliente.toalla < 1:
-                    self.buscar_toallas(cliente)
-                if cliente.rutina[indice_ejercicio][1] == 'pen' and cliente.se_va == False:
+            for indice_ejercicio in range(len(cliente.rutina)):
+                if cliente.se_va == True:
+                    break
+                if cliente.toallas < 1:
+                    yield self.env.process(self.buscar_toallas(cliente))
+                if cliente.rutina[indice_ejercicio][1] == 'pen':
                     while True:
-                        list_respuesta = self.elegir_maquina_cercana_menor_cola(cliente, self.dict_maquinas[cliente.rutina[indice_ejercicio][0]])
-                        if list_respuesta[0] != False:
+                        if cliente.se_va == True:
+                            break
+                        list_maquinas = self.dict_maquinas[cliente.rutina[indice_ejercicio][0]]
+                        list_respuesta = self.elegir_maquina_cercana_menor_cola(cliente, list_maquinas)
+                        if list_respuesta[0] == True:
                             list_maquina_sel = list_respuesta[2] if list_respuesta[1] == True else list_respuesta[3]
-                            velocidad = self.velocidad[cliente.perfil]()
-                            recorrido = self.env.timeout(list_maquina_sel[1]/ velocidad)
+
+                            desplazamiento = self.env.timeout(list_maquina_sel[1]/ cliente.velocidad)
+
+                            tiempo_restante = max(self.info_perfil_t8[cliente.tipo][0]  - (self.env.now - cliente.hora_llegada), 0)
                             tiempo_restante = self.env.timeout(tiempo_restante)
-                            yield recorrido | tiempo_restante
-                            if tiempo_restante.triggered == True:
+
+                            tiempo_cierre = max(900 - self.env.now, 0)
+                            tiempo_cierre = self.env.timeout(tiempo_cierre)
+
+                            yield desplazamiento | tiempo_restante | tiempo_cierre
+
+                            if tiempo_restante.processed or tiempo_cierre.processed:
                                 cliente.se_va = True
-                                # Se va si llego a tiempo max durante reocorrido
-                                self.salida_cliente()
                                 break
                             else:
-                                if list_maquina_sel[0].operativa == True:
-                                    self.ejecutar_ejercicio_fuerza(self, cliente)
-                                else:
-                                    # Aqui llego a la maquina, pero al llegar esta la maquina esta con fallas
-                                    pass            
+                                cliente.celda = list_maquina_sel[0].celda
+                                yield self.env.process(self.ejecutar_ejercicio_fuerza(cliente, list_maquina_sel[0], indice_ejercicio))
+                                if cliente.rutina[indice_ejercicio][1] == 'compl' or cliente.rutina[indice_ejercicio][1] == 'omit':
+                                    break
                         else:
-                            cliente.rutina[indice_ejercicio][1] == 'omit'
-        elif cliente.tipo == 'F':
-
-
-
-            toleracia_acumulada = {}
-            for indice_ejercicio in len(cliente.rutina):
-                # 0 porque no acumula toleracia todavia
-                toleracia_acumulada[cliente.rutina[indice_ejercicio][0]] = 0
-
-
-            
-            for indice_ejercicio in len(cliente.rutina):
-                if cliente.toalla < 1:
-                    self.buscar_toallas(cliente)
+                            cliente.rutina[indice_ejercicio][1] = 'omit'
+                            break
 
         elif cliente.tipo == 'I':
-            pass
+            for indice_ejercicio in range(len(cliente.rutina)):
+                if cliente.se_va == True:
+                    break
+                if cliente.toallas < 1:
+                    yield self.env.process(self.buscar_toallas(cliente))
+                list_maquinas = self.dict_maquinas[cliente.rutina[indice_ejercicio][0]]
+                while True:
+                    if cliente.se_va == True:
+                        break
+                    list_respuesta = self.elegir_maquina_cercana_menor_cola(cliente, list_maquinas)
+                    if list_respuesta[0] == True:
+                        list_maquina_sel = list_respuesta[2] if list_respuesta[1] == True else list_respuesta[3]
+
+                        desplazamiento = self.env.timeout(list_maquina_sel[1]/ cliente.velocidad)
+
+                        tiempo_restante = max(self.info_perfil_t8[cliente.tipo][0]  - (self.env.now - cliente.hora_llegada), 0)
+                        tiempo_restante = self.env.timeout(tiempo_restante)
+
+                        tiempo_cierre = max(900 - self.env.now, 0)
+                        tiempo_cierre = self.env.timeout(tiempo_cierre)
+
+                        yield desplazamiento | tiempo_restante | tiempo_cierre
+
+                        if tiempo_restante.processed or tiempo_cierre.processed:
+                            cliente.se_va = True
+                            break
+                        else:
+                            cliente.celda = list_maquina_sel[0].celda
+                            yield self.env.process(self.ejecutar_ejercicio_fuerza(cliente, list_maquina_sel[0], indice_ejercicio))
+                            if cliente.rutina[indice_ejercicio][1] == 'compl':
+                                break
+                    else:
+
+                        eventos_reparacion = [maq.evento for maq in list_maquinas]
+                        eventos_reparacion = simpy.AnyOf(self.env, eventos_reparacion)
+
+                        tiempo_restante = max(self.info_perfil_t8[cliente.tipo][0]  - (self.env.now - cliente.hora_llegada), 0)
+                        tiempo_restante = self.env.timeout(tiempo_restante)
+
+                        tiempo_cierre = max(900 - self.env.now, 0)
+                        tiempo_cierre = self.env.timeout(tiempo_cierre)
+
+                        yield eventos_reparacion | tiempo_restante | tiempo_cierre
+                        
+                        if tiempo_restante.processed or tiempo_cierre.processed:
+                            cliente.se_va = True
+                            break
+
+        elif cliente.tipo == 'F':
+            while True:
+                if cliente.se_va == True:
+                    break
+                seguir_rutina = False
+                for ejercicio in cliente.rutina:
+                    if ejercicio[1] == 'pen':
+                        seguir_rutina = True
+                if seguir_rutina == False:
+                    break
+                elif cliente.toallas < 1:
+                    yield self.env.process(self.buscar_toallas(cliente))
+                else:
+                    maquina_selec, distacia_selec, no_tiene_cola, eventos_reparacion, indice_ejercicio = self.seleccion_maquina_flex(cliente, True)
+                    if maquina_selec == None and len(eventos_reparacion) != 0:
+                        eventos_reparacion = simpy.AnyOf(self.env, eventos_reparacion)
+
+                        tiempo_restante = max(self.info_perfil_t8[cliente.tipo][0]  - (self.env.now - cliente.hora_llegada), 0)
+                        tiempo_restante = self.env.timeout(tiempo_restante)
+
+                        tiempo_cierre = max(900 - self.env.now, 0)
+                        tiempo_cierre = self.env.timeout(tiempo_cierre)
+                        yield eventos_reparacion | tiempo_restante | tiempo_cierre
+
+                        if tiempo_restante.processed or tiempo_cierre.processed:
+                            cliente.se_va = True
+                            break
+                    elif maquina_selec == None:
+
+                        maquina_selec, distacia_selec, no_tiene_cola, eventos_reparacion, indice_ejercicio = self.seleccion_maquina_flex(cliente, False)
+                        if no_tiene_cola == False:
+                            cliente.se_va = True
+                            break
+                        else:
+                            if maquina_selec != None:
+                                desplazamiento = self.env.timeout(distacia_selec/ cliente.velocidad)
+
+                                tiempo_cierre = max(900 - self.env.now, 0)
+                                tiempo_cierre = self.env.timeout(tiempo_cierre)
+
+                                tiempo_restante = max(self.info_perfil_t8[cliente.tipo][0]  - (self.env.now - cliente.hora_llegada), 0)
+                                tiempo_restante = self.env.timeout(tiempo_restante)
+
+                                yield desplazamiento | tiempo_restante | tiempo_cierre
+
+                                if tiempo_restante.processed or tiempo_cierre.processed:
+                                    cliente.se_va = True
+                                    break
+                                else:
+                                    cliente.celda = maquina_selec.celda
+                                    if maquina_selec.operativa == True:
+                                        yield self.env.process(self.ejecutar_ejercicio_fuerza(cliente, maquina_selec, indice_ejercicio))
+
+                    else:
+                        desplazamiento = self.env.timeout(distacia_selec/ cliente.velocidad)
+
+                        tiempo_restante = max(self.info_perfil_t8[cliente.tipo][0]  - (self.env.now - cliente.hora_llegada), 0)
+                        tiempo_restante = self.env.timeout(tiempo_restante)
+
+                        tiempo_cierre = max(900 - self.env.now, 0)
+                        tiempo_cierre = self.env.timeout(tiempo_cierre)
+
+                        yield desplazamiento | tiempo_restante | tiempo_cierre
+
+                        if tiempo_restante.processed or tiempo_cierre.processed:
+                            cliente.se_va = True
+                            break
+                        else:
+                            cliente.celda = maquina_selec.celda
+                            if maquina_selec.operativa == True:
+                                yield self.env.process(self.ejecutar_ejercicio_fuerza(cliente, maquina_selec, indice_ejercicio))
+
+        if cliente.se_va == False and cliente.plan_cardio == True:
+            self.env.process(self.ejecutar_cardio(cliente))
+        else:
+            self.env.process(self.salida_cliente(cliente))
 
     def ejecutar_ejercicio_fuerza(self, cliente, maquina, indice_ejercicio):
-        try:
-            tiempo_restante = self.info_perfil_t8[cliente.tipo][0] - (self.env.now() - cliente.hora_llegada)
-            tiempo_restante = self.env.timeout(tiempo_restante)
-            pedir_maquina = maquina.maquina_recurso.request()
-            tiempo_max_espera = self.env.timeout(self.info_perfil_t8[cliente.tipo][1]) 
-            tiempo_cierre = (900 - self.env.now()) if (900 - self.env.now()) else 0
-            tiempo_cierre = self.env.timeout(tiempo_cierre)
-            yield pedir_maquina | tiempo_max_espera | tiempo_restante | tiempo_cierre
-            if tiempo_max_espera.triggered == True:
-                  pass # Tiempo de espera maximamo
-                  return
-            elif tiempo_restante.triggered == True:
-                  cliente.se_va = True
-                  return
-                  # Tiempo de estar en gimnacio
-        except simpy.Interrupt as interrupcion:
-              return
-        # Aquí ya tiene la maquina
-        maquina.libre = False
-        p_entrenador = self.entrenador_asistencia[self.entrenador_asistencia[cliente.tipo][maquina.nombre]]
-        nececita_entrenador = st.bernoulli.rvs(p=p_entrenador, random_state=self.rng)
-        if nececita_entrenador == 1:
-            entrenador = yield self.entrenadores.get()
-            id_entrenador = entrenador[0]
-            velocidad = self.velocidad['PT']()
-            distancia = self.distancia(self.cords_celda(entrenador[1]), self.cords_celda(cliente.celda))
-            yield self.env.timeout(distancia / velocidad)  
-            # Cliente se va
-        if cliente.se_va == False:
-            g_maquina = self.g_dur_ejer_fuerza[maquina.nombre]
-            tiempo_maquina = self.dur_ejer_fuerza[cliente.tipo][g_maquina]()
-            yield self.env.timeout(tiempo_maquina)
-            cliente.rutina[indice_ejercicio][1] = 'compl'
-            p_falla = self.probabilidad_falla[maquina.nombre]
-            falla_maquina = st.bernoulli.rvs(p=p_falla, random_state=self.rng)
-            if falla_maquina == 1:
-                maquina.operativa = False
-                self.dict_info_recolectada['n_fallas'] += 1
-                for cliente_en_cola in maquina.maquina_recurso.queue:
-                    cliente_en_cola.proceso.interrupt(cause="La maquina ya no esta operativa")
-                    maquina.maquina_recurso.release(pedir_maquina)
+        cliente.fallo_maquina = False
+        cliente.seguir_ejercicio = True
+        inicio_espera = self.env.now
+
+        self.dict_pedir_maquina[cliente.id] = self.env.process(self.pedir_maquina(cliente, maquina, indice_ejercicio, inicio_espera))
+        maquina.list_id_cliente.append(cliente.id)
+
+        yield self.dict_pedir_maquina[cliente.id]
+
+        del self.dict_pedir_maquina[cliente.id]
+        maquina.list_id_cliente.remove(cliente.id)
+
+        if cliente.seguir_ejercicio == True:
+            maquina.libre = False
+
+            p_entrenador = self.entrenador_asistencia[cliente.tipo][maquina.nombre]
+            nececita_entrenador = st.bernoulli.rvs(p=p_entrenador, random_state=self.rng)
+
+            if nececita_entrenador == 1:
+                tiempo_restante = max(self.info_perfil_t8[cliente.tipo][0]  - (self.env.now - cliente.hora_llegada), 0) 
+                tiempo_restante = self.env.timeout(tiempo_restante)
+
+                tiempo_cierre = max(900 - self.env.now, 0)
+                tiempo_cierre = self.env.timeout(tiempo_cierre)
+
+                pedir_entrenador = self.entrenadores.get()
+
+                inicio_espera = self.env.now
+                respuesta = yield pedir_entrenador | tiempo_restante | tiempo_cierre
+                cliente.espera_asistente += self.env.now - inicio_espera
+
+                if tiempo_restante.processed or tiempo_cierre.processed:
+                    if pedir_entrenador.triggered:
+                        self.entrenadores.put(pedir_entrenador.value)
+                    else:
+                        pedir_entrenador.cancel()
+                    cliente.seguir_ejercicio = False
+                    maquina.maquina_recurso.release(cliente.pedir_maquina)
+                    maquina.libre = True
+                    cliente.se_va = True
+                else:
+                    pedir_entrenador = respuesta[pedir_entrenador]
+
+                    tiempo_restante = max(self.info_perfil_t8[cliente.tipo][0]  - (self.env.now - cliente.hora_llegada), 0) 
+                    tiempo_restante = self.env.timeout(tiempo_restante)
+
+                    tiempo_cierre = max(900 - self.env.now, 0)
+                    tiempo_cierre = self.env.timeout(tiempo_cierre)
+
+                    id_entrenador = pedir_entrenador[0]
+                    distancia = self.distancia(self.cords_celda[pedir_entrenador[1]], self.cords_celda[cliente.celda])
+                    desplazamiento = self.env.timeout(distancia / pedir_entrenador[2])  
+
+                    yield desplazamiento | tiempo_restante | tiempo_cierre
+                    
+                    if tiempo_restante.processed or tiempo_cierre.processed:
+                        cliente.seguir_ejercicio = False
+                        maquina.maquina_recurso.release(cliente.pedir_maquina)
+                        self.entrenadores.put([id_entrenador, pedir_entrenador[1], pedir_entrenador[2]])
+                        cliente.se_va = True
+
+            if cliente.seguir_ejercicio == True:
+                g_maquina = self.g_dur_ejer_fuerza[maquina.nombre]
+                tiempo_maquina = self.dur_ejer_fuerza[cliente.tipo][g_maquina]()
+                yield self.env.timeout(tiempo_maquina)
+
+                cliente.rutina[indice_ejercicio][1] = 'compl'
+
+                p_falla = self.probabilidad_falla[maquina.nombre]
+                falla_maquina = st.bernoulli.rvs(p=p_falla, random_state=self.rng)
+
+                if falla_maquina == 1:
+
+                    maquina.operativa = False
+                    self.dict_info_recolectada['n_fallas'] += 1
+
+                    for id, proceso in list(self.dict_pedir_maquina.items()):
+                        if id in maquina.list_id_cliente and proceso.is_alive:
+                            proceso.interrupt('Fallo la maquina')
+                            
+                    maquina.maquina_recurso.release(cliente.pedir_maquina)
                     self.env.process(self.reparar_maquina(maquina))
+                else:
+                    maquina.libre = True
+                    maquina.maquina_recurso.release(cliente.pedir_maquina)
+
+                if nececita_entrenador == 1: 
+                    self.entrenadores.put([id_entrenador, cliente.celda, pedir_entrenador[2]])
+                consumo_agua = min(cliente.agua, self.consumo_agua[cliente.tipo][maquina.categoria]())
+                cliente.agua -= consumo_agua
+                cliente.toallas -= 1
+                if cliente.agua == 0:
+                    yield self.env.process(self.buscar_agua(cliente))
+
+    def pedir_maquina(self, cliente, maquina, indice_ejercicio, inicio_espera, maquina_cardio = False):
+        try:
+            tiempo_restante = max(self.info_perfil_t8[cliente.tipo][0]  - (self.env.now - cliente.hora_llegada), 0)
+            tiempo_restante = self.env.timeout(tiempo_restante)
+
+            pedir_maquina = maquina.maquina_recurso.request()
+            cliente.pedir_maquina = pedir_maquina
+
+            tiempo_max = cliente.tiempo_acumulado[indice_ejercicio] if maquina_cardio == False else cliente.tiempo_acumulado_cardio
+            tiempo_max_espera = self.env.timeout(tiempo_max) 
+
+            tiempo_cierre = max(900 - self.env.now, 0)
+            tiempo_cierre = self.env.timeout(tiempo_cierre)
+
+            yield pedir_maquina | tiempo_max_espera | tiempo_restante | tiempo_cierre
+            if maquina_cardio == True:
+                cliente.espera_cardio += self.env.now - inicio_espera
+                if (not pedir_maquina.triggered) and (tiempo_max_espera.processed or tiempo_restante.processed or tiempo_cierre.processed):
+                    pedir_maquina.cancel()
+                    cliente.seguir_ejercicio = False
+                    cliente.se_va = True
             else:
+                cliente.espera_fuerza += self.env.now - inicio_espera
+
+                if pedir_maquina.triggered:
+                    pass
+                elif tiempo_max_espera.processed == True:
+                    if cliente.tipo == 'F':
+                        cliente.tiempo_acumulado[indice_ejercicio] = 0
+                    elif cliente.tipo == 'X':
+                        cliente.rutina[indice_ejercicio][1] = 'omit'
+                    pedir_maquina.cancel()
+                    cliente.seguir_ejercicio = False
+
+                elif tiempo_restante.processed == True or tiempo_cierre.processed == True:
+                    cliente.se_va = True
+                    cliente.seguir_ejercicio= False
+                    pedir_maquina.cancel()
+                
+        except simpy.Interrupt as interrupcion:
+            cliente.fallo_maquina = True
+            cliente.seguir_ejercicio = False
+            if pedir_maquina.triggered:
                 maquina.maquina_recurso.release(pedir_maquina)
-            if nececita_entrenador == 1: 
-                self.entrenadores.put([id_entrenador, cliente.celda])
-            # Puede cambiar
-            ejercicio = maquina.categoria if maquina.categoria in ['Empuje', 'Jalon', 'Piernas'] else 'Multifuncional'
-            consumo_agua = min(cliente.agua, self.consumo_agua[cliente.tipo][ejercicio])
-            cliente.agua -= consumo_agua
-            if cliente.agua == 0:
-                self.buscar_agua(cliente)
-        
+            else:
+                pedir_maquina.cancel()
+            if maquina_cardio == True:
+                cliente.espera_cardio += self.env.now - inicio_espera
+                cliente.tiempo_acumulado_cardio = max(0,cliente.tiempo_acumulado_cardio - (self.env.now - inicio_espera))
+            else:
+                cliente.espera_fuerza += self.env.now - inicio_espera
+                cliente.tiempo_acumulado[indice_ejercicio] = max(0, cliente.tiempo_acumulado[indice_ejercicio] - (self.env.now - inicio_espera))
+
+
+    def ejecutar_cardio(self, cliente):
+        while True:
+
+            if cliente.se_va == True:
+                break
+
+            list_respuesta = self.elegir_maquina_cercana_menor_cola(cliente, self.dict_maquinas['Trotadora'])
+            
+            if list_respuesta[0] == True:
+                cliente.seguir_ejercicio = True
+                list_maquina_sel = list_respuesta[2] if list_respuesta[1] == True else list_respuesta[3]
+                desplazamiento = self.env.timeout(list_maquina_sel[1]/ cliente.velocidad)
+                
+                tiempo_restante = max(0, self.info_perfil_t8[cliente.tipo][0] - (self.env.now - cliente.hora_llegada))
+                tiempo_restante = self.env.timeout(tiempo_restante)
+
+                tiempo_cierre = max(0, 900 - self.env.now)
+                tiempo_cierre = self.env.timeout(tiempo_cierre)
+
+                yield desplazamiento | tiempo_restante | tiempo_cierre
+
+                if tiempo_restante.processed or tiempo_cierre.processed:
+                    cliente.se_va = True
+                    break
+
+                elif list_maquina_sel[0].operativa != False:
+
+                    inicio_espera = self.env.now
+
+                    self.dict_pedir_maquina[cliente.id] = self.env.process(self.pedir_maquina(cliente, list_maquina_sel[0], 0, inicio_espera, True))
+                    list_maquina_sel[0].list_id_cliente.append(cliente.id)
+                
+                    yield self.dict_pedir_maquina[cliente.id]
+
+                    del self.dict_pedir_maquina[cliente.id]
+                    list_maquina_sel[0].list_id_cliente.remove(cliente.id)
+
+                    if cliente.se_va == False and cliente.seguir_ejercicio == True:
+                        tiempo_cardio = self.env.timeout(self.dur_ejer_cardio[cliente.tipo]())
+                        yield tiempo_cardio
+
+                        cliente.cardio_completado = True
+
+                        p_falla = self.probabilidad_falla['Trotadora']
+                        falla_maquina = st.bernoulli.rvs(p=p_falla, random_state=self.rng)
+
+                        if falla_maquina == 1:
+                            list_maquina_sel[0].operativa = False
+                            self.dict_info_recolectada['n_fallas'] += 1
+
+                            for id, proceso in list(self.dict_pedir_maquina.items()):
+                                if id in list_maquina_sel[0].list_id_cliente and proceso.is_alive:
+                                    proceso.interrupt('Fallo la maquina')
+
+                            list_maquina_sel[0].maquina_recurso.release(cliente.pedir_maquina)
+                            self.env.process(self.reparar_maquina(list_maquina_sel[0]))
+                        else:
+                            list_maquina_sel[0].maquina_recurso.release(cliente.pedir_maquina)
+                        cliente.se_va = True
+            else:
+                eventos_reparacion = [maq.evento for maq in self.dict_maquinas['Trotadora']]
+                eventos_reparacion = simpy.AnyOf(self.env, eventos_reparacion)
+
+                tiempo_restante = max(0, self.info_perfil_t8[cliente.tipo][0] - (self.env.now - cliente.hora_llegada))
+                tiempo_restante = self.env.timeout(tiempo_restante)
+
+                tiempo_cierre = max(0, 900 - self.env.now)
+                tiempo_cierre = self.env.timeout(tiempo_cierre)
+
+                # Puede que sea un error pone el tiempo max espera, el enunciado no es muy claro
+                tiempo_max_espera = self.env.timeout(self.info_perfil_t8[cliente.tipo][1]) 
+
+                yield eventos_reparacion | tiempo_restante | tiempo_cierre | tiempo_max_espera
+
+                if tiempo_restante.processed or tiempo_cierre.processed or tiempo_max_espera.processed:
+                    cliente.se_va = True
+                
+        self.env.process(self.salida_cliente(cliente))
+
+    def salida_cliente(self, cliente):
+        if cliente.celda != 13:
+            distancia = self.distancia(self.cords_celda[cliente.celda], self.cords_celda[13])
+            yield self.env.timeout(distancia / cliente.velocidad)
+            cliente.celda = 13
+        distancia = self.distancia(self.cords_celda[13], self.cords_celda[6])
+        yield self.env.timeout(distancia / cliente.velocidad)
+        cliente.celda = 6
+        distancia = self.distancia(self.cords_celda[6], self.cords_celda[1])
+        yield self.env.timeout(distancia/ cliente.velocidad)
+        cliente.celda = 1
+
+        n_pendientes, n_omitidos = cliente.n_ejercicios_pendientes_omitidos()
+        self.dict_info_recolectada['n_ejercicios_omitidos'] += n_omitidos
+        self.dict_info_recolectada['n_ejercicios_pendientes'] += n_pendientes
+
+        if cliente.plan_cardio == True:
+            self.dict_info_recolectada['n_planificaron_cardio'] += 1
+            self.dict_info_recolectada['n_completaron_cardio'] += 1 if cliente.cardio_completado == True else 0
+
+        n_ejercicio_completo, n_ejercicio_planificados = cliente.cumplimento_ejercicio()
+        self.dict_info_recolectada['n_ejercicio_completo'] += n_ejercicio_completo
+        self.dict_info_recolectada['n_ejercicio_planificados'] += n_ejercicio_planificados
+
+        self.dict_info_recolectada['completaron_rutina'] += 1 if cliente.completo_rutina_fuerza() == True else 0
+
+        self.dict_info_recolectada['espera_total'].append(cliente.espera_agua + cliente.espera_toallas + cliente.espera_asistente + cliente.espera_cardio + cliente.espera_fuerza + cliente.espera_recepcion)
+        self.dict_info_recolectada['permanencia'].append(self.env.now - cliente.hora_llegada)
+
+        self.dict_datos_estado['n_clientes_sistema'] -= 1
+
+    
     def buscar_agua(self, cliente):
-        # Creo que falta los casos en que cierre
-        distancia = self.distancia(self.cords_celda(cliente.celda), self.cords_celda(48))
-        velocidad = self.velocidad[cliente.tipo]()
-        yield self.env.timeout(distancia/velocidad) 
-        cliente.celda = 48
-        if self.bidon_agua.level == 0:
-            if self.dict_datos_estado['pedir_agua'][0] == False:
-                self.dict_datos_estado['pedir_agua'][0] = True
-                self.env.process(self.reposicion_agua(1))
-        cliente.agua += self.bidon_agua.get(min(self.bidon_agua.level, self.info_perfil_t8[cliente.tipo][2]))
-        yield self.env.timeout(0.75)
-        
+        distancia = self.distancia(self.cords_celda[cliente.celda], self.cords_celda[48])
+        desplazamiento = self.env.timeout(distancia/cliente.velocidad)
+
+        tiempo_restante = max(0, self.info_perfil_t8[cliente.tipo][0] - (self.env.now - cliente.hora_llegada))
+        tiempo_restante = self.env.timeout(tiempo_restante)
+
+        tiempo_cierre = max(0, 900 - self.env.now)
+        tiempo_cierre = self.env.timeout(tiempo_cierre)
+
+        yield desplazamiento | tiempo_cierre | tiempo_restante
+
+        if tiempo_cierre.processed or tiempo_restante.processed:
+            cliente.se_va = True
+        else:
+            cliente.celda = 48
+            if self.bidon_agua.level == 0:
+                if self.dict_datos_estado['pedir_agua'] == False:
+                    self.dict_datos_estado['pedir_agua'] = True
+                    self.env.process(self.reposicion_agua(1))
+
+            pedir_acceso = self.bidon_acceso.request()
+
+            tiempo_cierre = max(0, 900 - self.env.now)
+            tiempo_cierre = self.env.timeout(tiempo_cierre)
+
+            tiempo_restante = max(0, self.info_perfil_t8[cliente.tipo][0] - (self.env.now - cliente.hora_llegada))
+            tiempo_restante_acumulado = tiempo_restante
+            tiempo_restante = self.env.timeout(tiempo_restante)
+
+            inicio_espera = self.env.now
+
+            yield pedir_acceso | tiempo_cierre | tiempo_restante
+            cliente.espera_agua += self.env.now - inicio_espera
+            
+
+            if tiempo_cierre.processed or tiempo_restante.processed:
+                cliente.se_va = True
+                pedir_acceso.cancel()
+            else:
+                if self.bidon_agua.level == 0:
+                    if self.dict_datos_estado['pedir_agua'] == False:
+                        self.dict_datos_estado['pedir_agua'] = True
+                        self.bido_reposicion = simpy.Event(self.env)
+                        self.env.process(self.reposicion_agua(1))
+
+                tiempo_restante = max(0, tiempo_restante_acumulado - self.env.now)
+                tiempo_restante = self.env.timeout(tiempo_restante)
+
+                tiempo_cierre = max(0, 900 - self.env.now)
+                tiempo_cierre = self.env.timeout(tiempo_cierre)
+
+                yield self.bido_reposicion | tiempo_cierre | tiempo_restante
+
+                if tiempo_cierre.processed or tiempo_restante.processed:
+                    cliente.se_va = True
+                else:
+                    agua = min(self.bidon_agua.level, self.info_perfil_t8[cliente.tipo][2])
+                    yield self.bidon_agua.get(agua)
+                    yield self.env.timeout(0.75)
+                    cliente.agua += agua
+                self.bidon_acceso.release(pedir_acceso)
+
 
     def buscar_toallas(self, cliente):
-        # Creo que falta los casos en que cierre
-        distancia = self.distancia(self.cords_celda(cliente.celda), self.cords_celda(44))
-        velocidad = self.velocidad[cliente.tipo]()
-        tiempo_cierre = (900 - self.env.now()) if (900 - self.env.now()) else 0
-        tiempo_cierre = self.env.timeout(tiempo_cierre)
-        # Poner lo de 900
-        yield self.env.timeout(distancia/velocidad) | tiempo_cierre
-        if tiempo_cierre.triggered:
-            cliente.se_va = True
-            return 
+        distancia = self.distancia(self.cords_celda[cliente.celda], self.cords_celda[44])
+        desplazamiento = self.env.timeout(distancia/cliente.velocidad)
 
-        cliente.celda = 44
-        if len(self.dispensador_toallas.items) == 0:
-            if self.dict_datos_estado['pedir_toallas'][0] == False:
-                self.dict_datos_estado['pedir_toallas'][0] = True
-                self.env.process(self.reposicion_toallas(1))
-        # Puede generar error, revisar
-        # Puede generar error, revisar
-        # Puede generar error, revisar
-        # Puede generar error, revisar
-        # Puede generar error, revisar
-        with self.dispensador_acceso.request() as pedir_toallas:
-            yield pedir_toallas
-            for toalla in range(min(2, len(self.dispensador_toallas.items))):
-                cliente.toallas += self.dispensador_toallas.get()
-            yield self.env.timeout(0.75)
+        tiempo_cierre = max(0, 900 - self.env.now)
+        tiempo_cierre = self.env.timeout(tiempo_cierre)
+
+        tiempo_restante = max(0, self.info_perfil_t8[cliente.tipo][0] - (self.env.now - cliente.hora_llegada))
+        tiempo_restante = self.env.timeout(tiempo_restante)
+
+        yield desplazamiento | tiempo_cierre | tiempo_restante
+        if tiempo_cierre.processed or tiempo_restante.processed:
+            cliente.se_va = True
+        else:
+            cliente.celda = 44
+      
+            pedir_acceso = self.dispensador_acceso.request()
+
+            tiempo_cierre = max(0, 900 - self.env.now)
+            tiempo_cierre = self.env.timeout(tiempo_cierre)
+
+            tiempo_restante = max(0, self.info_perfil_t8[cliente.tipo][0] - (self.env.now - cliente.hora_llegada))
+            tiempo_restante_acumulado = tiempo_restante
+            tiempo_restante = self.env.timeout(tiempo_restante)
+
+            inicio_espera = self.env.now
+
+            yield pedir_acceso | tiempo_cierre | tiempo_restante
+            cliente.espera_toallas += self.env.now - inicio_espera
+
+            if tiempo_cierre.processed or tiempo_restante.processed:
+                cliente.se_va = True
+                pedir_acceso.cancel()
+            else:
+                if len(self.dispensador_toallas.items) == 0:
+                    if self.dict_datos_estado['pedir_toallas'] == False:
+                        self.dispensador_reposicion = simpy.Event(self.env)
+                        self.dict_datos_estado['pedir_toallas'] = True
+                        self.env.process(self.reposicion_toallas(1))
+
+                tiempo_restante = max(0, tiempo_restante_acumulado - self.env.now)
+                tiempo_restante = self.env.timeout(tiempo_restante)
+
+                tiempo_cierre = max(0, 900 - self.env.now)
+                tiempo_cierre = self.env.timeout(tiempo_cierre)
+            
+                yield self.dispensador_reposicion | tiempo_cierre | tiempo_restante
+
+                if tiempo_cierre.processed or tiempo_restante.processed:
+                    cliente.se_va = True
+                else:
+                    for toalla in range(min(2, len(self.dispensador_toallas.items))):
+                        yield self.dispensador_toallas.get()
+                        cliente.toallas += 1
+                    yield self.env.timeout(0.75)
+                self.dispensador_acceso.release(pedir_acceso)
 
     def inpeccion_agua(self):
-        # Se debe definir un criterio de parada
         tiempo_agua = 35
         while tiempo_agua < 900:
-            # Son 35 minutos
             yield self.env.timeout(tiempo_agua)
             tiempo_agua += 35
-            if self.recepcionista.count < 2:
+            if self.recepcionistas.count < 2:
                 if self.bidon_agua.level < 5:
-                    if self.dict_datos_estado['pedir_agua'][0] == False:
-                        self.dict_datos_estado['pedir_agua'][0] = True
+                    if self.dict_datos_estado['pedir_agua'] == False:
+                        self.bido_reposicion = simpy.Event(self.env)
+                        self.dict_datos_estado['pedir_agua'] = True
                         self.env.process(self.reposicion_agua(3))
-    
+
+    def inpeccion_toallas(self):
+        tiempo_toallas = 45
+        while tiempo_toallas < 900:
+            yield self.env.timeout(tiempo_toallas)
+            tiempo_toallas += 45
+            if self.recepcionistas.count < 2:
+                if len(self.dispensador_toallas.items) < 30:
+                    if self.dict_datos_estado['pedir_toallas'] == False:
+                        self.dispensador_reposicion = simpy.Event(self.env)
+                        self.dict_datos_estado['pedir_toallas'] = True
+                        self.env.process(self.reposicion_toallas(3))
 
     def reposicion_agua(self, prioridad):
         pedir_recepsionista = self.recepcionistas.request(priority=prioridad)
         yield pedir_recepsionista
-        distancia = self.distancia(self.cords_celda(7), self.cords_celda(48))
-        velocidad = self.velocidad['R']()
-        yield self.env.timeout(distancia/velocidad)
+
+        velocidad_r = self.dict_datos_estado['velocidad_recepcionista'][0] if self.recepcionistas.count == 1 else self.dict_datos_estado['velocidad_recepcionista'][1]
+
+        distancia = self.distancia(self.cords_celda[7], self.cords_celda[48])
+        yield self.env.timeout(distancia/velocidad_r)
+
         tiempo_reponer_agua = self.tiempo_reposicion['Agua']()
         yield self.env.timeout(tiempo_reponer_agua)
-        # Da lo mismo la cantidad, siempre pone el maximo
-        self.bidon_agua.put(20)
-        distancia = self.distancia(self.cords_celda(48), self.cords_celda(7))
-        velocidad = self.velocidad['R']()
-        yield self.env.timeout(distancia/velocidad)
+        reponer = 20 - self.bidon_agua.level
+        self.bidon_agua.put(reponer)
+        self.bido_reposicion.succeed()
+        self.dict_datos_estado['pedir_agua'] = False
+
+        distancia = self.distancia(self.cords_celda[48], self.cords_celda[7])
+        yield self.env.timeout(distancia/velocidad_r)
+
         self.recepcionistas.release(pedir_recepsionista)
+        
+        
 
-    def inpeccion_toallas(self):
-            tiempo_toallas = 45
-            # Verificar 900
-            while tiempo_toallas < 900:
-                # Son 45 minutos
-                yield self.env.timeout(tiempo_toallas)
-                tiempo_toallas += 45
-                if self.recepcionista.count < 2:
-                    if len(self.dispensador_toallas.items) < 30:
-                        if self.dict_datos_estado['pedir_toallas'][0] == False:
-                            self.dict_datos_estado['pedir_toallas'][0] = True
-                            self.env.process(self.reposicion_toallas(3))
     def reposicion_toallas(self, prioridad):
-
         pedir_recepsionista = self.recepcionistas.request(priority=prioridad)
         yield pedir_recepsionista
-        distancia = self.distancia(self.cords_celda(7), self.cords_celda(44))
-        velocidad = self.velocidad['R']()
-        yield self.env.timeout(distancia/velocidad)
+
+        velocidad_r = self.dict_datos_estado['velocidad_recepcionista'][0] if self.recepcionistas.count == 1 else self.dict_datos_estado['velocidad_recepcionista'][1]
+
+        distancia = self.distancia(self.cords_celda[7], self.cords_celda[44])
+        yield self.env.timeout(distancia/velocidad_r)
+
         tiempo_reponer_toallas = self.tiempo_reposicion['Toallas']()
         yield self.env.timeout(tiempo_reponer_toallas)
+
         toallas_reponer = 100 - len(self.dispensador_toallas.items)
         for toalla in range(toallas_reponer):
             self.dispensador_toallas.put(1)
-        distancia = self.distancia(self.cords_celda(44), self.cords_celda(7))
+        self.dict_datos_estado['pedir_toallas'] = False
+        self.dispensador_reposicion.succeed()
+
+        distancia = self.distancia(self.cords_celda[44], self.cords_celda[7])
         velocidad = self.velocidad['R']()
+        yield self.env.timeout(distancia/velocidad_r)
+
         self.recepcionistas.release(pedir_recepsionista)
 
 
-
-
-    def reparar_maquina(self, maquina):
-        
+    def reparar_maquina(self, maquina):        
         with self.tecnico.request() as pedir_tecnico:
             yield pedir_tecnico
-            distancia = self.distancia(self.cords_celda(self.dict_datos_estado['celda_tecnico']), self.cords_celda(maquina.celda))
-            velocidad = self.velocidad['M']
-            yield self.env.timeout(distancia/velocidad)
+
+            distancia = self.distancia(self.cords_celda[self.dict_datos_estado['celda_tecnico']], self.cords_celda[maquina.celda])
+            
+            desplazamiento = self.env.timeout(distancia/self.dict_datos_estado['velocidad_mecanico'])
+
+            yield desplazamiento
+
+            self.dict_datos_estado['celda_tecnico'] = maquina.celda
+
             g_reparacio = self.g_reparacion[maquina.nombre]
             tiempo_reparacion = self.tiempo_reparacion[g_reparacio]()
+
             yield self.env.timeout(tiempo_reparacion)
+
             maquina.operativa = True
+            maquina.libre = True
+            maquina.evento.succeed()
+            maquina.evento = simpy.Event(self.env)
 
-
-    def salida_cliente(self, cliente):
-        pass
-   
-
-
+            if len(self.tecnico.queue) == 0:
+                distancia = self.distancia(self.cords_celda[self.dict_datos_estado['celda_tecnico']], self.cords_celda[7])
+                desplazamiento = self.env.timeout(distancia/self.dict_datos_estado['velocidad_mecanico'])
+                yield desplazamiento
+                self.dict_datos_estado['celda_tecnico'] = 7
+                
     def elegir_maquina_cercana_menor_cola(self, cliente, lista_maquinas):
         maquina_cercana_con_cola = lista_maquinas[0]
         maquina_cercana_sin_cola = lista_maquinas[0]
         distancia_maquina_cercana_con_cola = self.distancia(self.cords_celda[cliente.celda], self.cords_celda[maquina_cercana_con_cola.celda])
-        distancia_maquina_cercana_sin_cola  = self.distancia(self.cords_celda[cliente.celda], self.cords_celda[maquina_cercana_sin_cola .celda])
+        distancia_maquina_cercana_sin_cola  = self.distancia(self.cords_celda[cliente.celda], self.cords_celda[maquina_cercana_sin_cola.celda])
         for maquina in lista_maquinas:
             if maquina.operativa == True:
                 distancia = self.distancia(self.cords_celda[cliente.celda], self.cords_celda[maquina.celda])
@@ -609,14 +1137,68 @@ class Simulacion:
         # El return es [hay maquina operativa?, hay maquina sin cola, [maquina con cola cercana, distancia], [maquina sin cola cercana, distancia]]
         return [hay_maquina_operativa, hay_maquina_sin_cola, [maquina_cercana_sin_cola, distancia_maquina_cercana_sin_cola], 
                 [maquina_cercana_con_cola, distancia_maquina_cercana_con_cola]]
-    def seleccionar_ejercicio_flexible(self, cliente, ejercicio_ban):
-        list_maquinas = []
-        maquina_elegida = ''
-        distancia_maquina = ''
-        for ejercicio in cliente.rutina:
-            if ejercicio[0] !=  ejercicio_ban:
-                list_maquinas.append([ejercicio, self.elegir_maquina_cercana_menor_cola(cliente, ejercicio)])
-        for maquina in list_maquinas:
-            if maquina['a']:
-                pass
+    def seleccion_maquina_flex(self, cliente, con_ejercicios_antiguos):
+        maquina_selec = None
+        distacia_selec = None
+        no_tiene_cola = False
+        eventos_reparacion = []
+        indice_ejercicio_sel = 0
+        for indice_ejercicio in range(len(cliente.rutina)):
+            if cliente.rutina[indice_ejercicio][1] == 'pen' and (con_ejercicios_antiguos == False or cliente.tiempo_acumulado[indice_ejercicio] > 0):
+                list_maquinas = self.dict_maquinas[cliente.rutina[indice_ejercicio][0]]
+                eventos_reparacion += [maq.evento for maq in list_maquinas]
+                list_respuesta = self.elegir_maquina_cercana_menor_cola(cliente, list_maquinas)
+                if not list_respuesta[0]:
+                    continue   # sin unidades operativas de este tipo: no compararlas
+                # ESTE BLOQUE LO QUE HACE ES ESCOGER SEGUN MAQUINA LIBRE -> MAQUINA CERCANA -> MAQUINA CON MENOR NUMERO DE CELDA
+                # SI NO HAY MAQUINA SIN COLA: MAQUINA CON MENOS COLA -> MAQUINA CERCANA -> MAQUINA CON MENOR NUMERO DE CELDA
+                if maquina_selec == None:
+                    if list_respuesta[0] == True:
+                        no_tiene_cola = list_respuesta[1] 
+                        list_maquina_sel = list_respuesta[2] if list_respuesta[1] == True else list_respuesta[3]
+                        maquina_selec = list_maquina_sel[0]
+                        distacia_selec = list_maquina_sel[1]
+                        indice_ejercicio_sel = indice_ejercicio
+                else:
+                    maquina_evaluada = list_respuesta[2] if list_respuesta[1] == True else list_respuesta[3]
+                    if no_tiene_cola == False and list_respuesta[1] == True:
+                        maquina_selec = maquina_evaluada[0]
+                        distacia_selec = maquina_evaluada[1]
+                        indice_ejercicio_sel = indice_ejercicio
+                        no_tiene_cola = True 
+                    elif no_tiene_cola == True and list_respuesta[1] == True:
+                        if distacia_selec > maquina_evaluada[1]:
+                            maquina_selec = maquina_evaluada[0]
+                            distacia_selec = maquina_evaluada[1]
+                            indice_ejercicio_sel = indice_ejercicio
+                        elif distacia_selec == maquina_evaluada[1]:
+                            if maquina_evaluada[0].celda < maquina_selec.celda:
+                                maquina_selec = maquina_evaluada[0]
+                                distacia_selec = maquina_evaluada[1]
+                                indice_ejercicio_sel = indice_ejercicio
+                    elif no_tiene_cola == False and list_respuesta[1] == False:
+                        if len(maquina_evaluada[0].maquina_recurso.queue) < len(maquina_selec.maquina_recurso.queue):
+                            maquina_selec = maquina_evaluada[0]
+                            distacia_selec = maquina_evaluada[1]
+                            indice_ejercicio_sel = indice_ejercicio
+                        elif len(maquina_evaluada[0].maquina_recurso.queue) == len(maquina_selec.maquina_recurso.queue):
+                            if distacia_selec > maquina_evaluada[1]:
+                                maquina_selec = maquina_evaluada[0]
+                                distacia_selec = maquina_evaluada[1]
+                                indice_ejercicio_sel = indice_ejercicio
+                            elif distacia_selec == maquina_evaluada[1]:
+                                if maquina_evaluada[0].celda < maquina_selec.celda:
+                                    maquina_selec = maquina_evaluada[0]
+                                    distacia_selec = maquina_evaluada[1]
+                                    indice_ejercicio_sel = indice_ejercicio
+        return maquina_selec, distacia_selec, no_tiene_cola, eventos_reparacion, indice_ejercicio_sel
+
         
+if __name__ == "__main__":
+    sim = Simulacion('log.txt')
+    sim.iniciar_simulacion(seed=2133, n_replicas=1)
+    print(sim.dict_datos_replica[0][0]['int_llegada'])
+    print(sim.dict_datos_replica[0][0]['cliente_desviado'])
+    print(f'M1 {sim.dict_datos_replica[0][0]['cliente_desviado']/sim.dict_datos_replica[0][0]['int_llegada']}')
+    print(f'M2 {np.average(sim.dict_datos_replica[0][0]['permanencia'])}')
+    print(f'M3 {np.average(sim.dict_datos_replica[0][0]['espera_total'])}')
